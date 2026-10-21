@@ -35,12 +35,12 @@ This enables:
 
 2. **Set up credentials:**
    ```bash
-   # Copy your Intersight private key
-   cp ~/path/to/your/private_key.pem ./auth/private_key.pem
-   
    # Create environment file
    cp .env.example .env
-   # Edit .env and set your INTERSIGHT_API_KEY_ID
+   # Edit .env and set INTERSIGHT_OAUTH2_CLIENT_ID and INTERSIGHT_OAUTH2_CLIENT_SECRET
+
+   # Or, for API key auth: set INTERSIGHT_API_KEY_ID in .env and copy your private key
+   cp ~/path/to/your/private_key.pem ./auth/private_key.pem
    ```
 
 3. **Start the container:**
@@ -108,9 +108,13 @@ curl -X POST http://localhost:3000/api/batch \
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `INTERSIGHT_API_KEY_ID` | Yes | - | Your Intersight API Key ID |
-| `INTERSIGHT_PRIVATE_KEY_PATH` | Yes | `/app/secrets/private_key.pem` | Path to private key in container |
-| `INTERSIGHT_BASE_URL` | No | `https://intersight.com` | Intersight API base URL |
+| `INTERSIGHT_AUTH_METHOD` | No | `oauth2` if a client ID is set, else `apikey` | Authentication method: `oauth2` or `apikey` |
+| `INTERSIGHT_OAUTH2_CLIENT_ID` | OAuth2 | - | OAuth2 client ID |
+| `INTERSIGHT_OAUTH2_CLIENT_SECRET` | OAuth2 | - | OAuth2 client secret (or use `INTERSIGHT_OAUTH2_CLIENT_SECRET_PATH`) |
+| `INTERSIGHT_OAUTH2_TOKEN_URL` | No | `<base URL host>/iam/token` | OAuth2 token endpoint |
+| `INTERSIGHT_API_KEY_ID` | API key | - | Your Intersight API Key ID |
+| `INTERSIGHT_API_SECRET_KEY_PATH` | API key | `/app/secrets/private_key.pem` | Path to private key in container |
+| `INTERSIGHT_BASE_URL` | No | `https://intersight.com/api/v1` | Intersight API base URL, including `/api/v1` |
 | `INTERSIGHT_TOOL_MODE` | No | `core` | Tool selection mode: `core` (65 tools) or `all` (199+ tools) |
 | `PORT` | No | `3000` | HTTP server port |
 
