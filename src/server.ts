@@ -30,6 +30,7 @@ import {
 import { IntersightApiService } from './services/intersightApi.js';
 import { loadConfig, loadMCPServerConfig, isToolEnabled, getEnabledTools, MCPServerConfig } from './utils/config.js';
 import { createSecurityHealthCheckReport } from './services/securityHealthCheckAgent.js';
+import { validateMoidArgs, assertPolicyType, assertPoolType, assertResourceType } from './utils/validation.js';
 
 export class IntersightMCPServer {
   private server: Server;
@@ -3504,6 +3505,9 @@ export class IntersightMCPServer {
   }
 
   private async handleToolCall(name: string, args: Record<string, any>): Promise<any> {
+    // MOID arguments are interpolated into API paths and filters below
+    validateMoidArgs(args);
+
     switch (name) {
       // Inventory & Discovery
       case 'list_compute_servers':
@@ -3527,9 +3531,11 @@ export class IntersightMCPServer {
 
       // Policy Management
       case 'list_policies':
+        assertPolicyType(args.policyType);
         return this.apiService.listPolicies(args.policyType);
-      
+
       case 'get_policy':
+        assertPolicyType(args.policyType);
         return this.apiService.getPolicy(args.policyType, args.moid);
       
       case 'create_boot_policy':
@@ -3576,7 +3582,7 @@ export class IntersightMCPServer {
         const vnicFilter = args.lanConnectivityPolicyMoid
           ? `LanConnectivityPolicy/Moid eq '${args.lanConnectivityPolicyMoid}'`
           : '';
-        return this.apiService.get(`/vnic/EthIfs${vnicFilter ? '?$filter=' + vnicFilter : ''}`);
+        return this.apiService.get(`/vnic/EthIfs${vnicFilter ? '?$filter=' + encodeURIComponent(vnicFilter) : ''}`);
       
       case 'get_vnic':
         return this.apiService.get(`/vnic/EthIfs/${args.moid}`);
@@ -3631,19 +3637,19 @@ export class IntersightMCPServer {
       
       // vNIC Policy Management
       case 'list_lan_connectivity_policies':
-        return this.apiService.get(args.filter ? `/vnic/LanConnectivityPolicies?$filter=${args.filter}` : '/vnic/LanConnectivityPolicies');
+        return this.apiService.get(args.filter ? `/vnic/LanConnectivityPolicies?$filter=${encodeURIComponent(args.filter)}` : '/vnic/LanConnectivityPolicies');
       
       case 'get_lan_connectivity_policy':
         return this.apiService.get(`/vnic/LanConnectivityPolicies/${args.moid}`);
       
       case 'list_eth_adapter_policies':
-        return this.apiService.get(args.filter ? `/vnic/EthAdapterPolicies?$filter=${args.filter}` : '/vnic/EthAdapterPolicies');
+        return this.apiService.get(args.filter ? `/vnic/EthAdapterPolicies?$filter=${encodeURIComponent(args.filter)}` : '/vnic/EthAdapterPolicies');
       
       case 'list_eth_qos_policies':
-        return this.apiService.get(args.filter ? `/vnic/EthQosPolicies?$filter=${args.filter}` : '/vnic/EthQosPolicies');
+        return this.apiService.get(args.filter ? `/vnic/EthQosPolicies?$filter=${encodeURIComponent(args.filter)}` : '/vnic/EthQosPolicies');
       
       case 'list_eth_network_group_policies':
-        return this.apiService.get(args.filter ? `/fabric/EthNetworkGroupPolicies?$filter=${args.filter}` : '/fabric/EthNetworkGroupPolicies');
+        return this.apiService.get(args.filter ? `/fabric/EthNetworkGroupPolicies?$filter=${encodeURIComponent(args.filter)}` : '/fabric/EthNetworkGroupPolicies');
       
       case 'create_vlan_group':
         const vlanSettings = args.vlanIds.map((vlanId: number) => ({
@@ -3683,13 +3689,16 @@ export class IntersightMCPServer {
         });
       
       case 'update_policy':
+        assertPolicyType(args.policyType);
         return this.apiService.updatePolicy(args.policyType, args.moid, args.updates);
-      
+
       case 'delete_policy':
+        assertPolicyType(args.policyType);
         return this.apiService.deletePolicy(args.policyType, args.moid);
 
       // Pool Management
       case 'list_pools':
+        assertPoolType(args.poolType);
         return this.apiService.listPools(args.poolType);
       
       case 'create_ip_pool':
@@ -3781,14 +3790,16 @@ export class IntersightMCPServer {
         });
       
       case 'update_pool':
+        assertPoolType(args.poolType);
         return this.apiService.updatePool(args.poolType, args.moid, args.updates);
-      
+
       case 'delete_pool':
+        assertPoolType(args.poolType);
         return this.apiService.deletePool(args.poolType, args.moid);
 
       // Configuration Management - Adapter Configuration
       case 'list_adapter_config_policies':
-        return this.apiService.get(args.filter ? `/vnic/EthAdapterPolicies?$filter=${args.filter}` : '/vnic/EthAdapterPolicies');
+        return this.apiService.get(args.filter ? `/vnic/EthAdapterPolicies?$filter=${encodeURIComponent(args.filter)}` : '/vnic/EthAdapterPolicies');
       
       case 'get_adapter_config_policy':
         return this.apiService.get(`/vnic/EthAdapterPolicies/${args.moid}`);
@@ -3815,7 +3826,7 @@ export class IntersightMCPServer {
 
       // Configuration Management - Fabric Port Channels
       case 'list_fabric_port_channels':
-        return this.apiService.get(args.filter ? `/fabric/PortChannels?$filter=${args.filter}` : '/fabric/PortChannels');
+        return this.apiService.get(args.filter ? `/fabric/PortChannels?$filter=${encodeURIComponent(args.filter)}` : '/fabric/PortChannels');
       
       case 'get_fabric_port_channel':
         return this.apiService.get(`/fabric/PortChannels/${args.moid}`);
@@ -3841,7 +3852,7 @@ export class IntersightMCPServer {
 
       // Configuration Management - VLANs
       case 'list_fabric_vlans':
-        return this.apiService.get(args.filter ? `/fabric/Vlans?$filter=${args.filter}` : '/fabric/Vlans');
+        return this.apiService.get(args.filter ? `/fabric/Vlans?$filter=${encodeURIComponent(args.filter)}` : '/fabric/Vlans');
       
       case 'get_fabric_vlan':
         return this.apiService.get(`/fabric/Vlans/${args.moid}`);
@@ -3877,7 +3888,7 @@ export class IntersightMCPServer {
 
       // Configuration Management - VSANs
       case 'list_fabric_vsans':
-        return this.apiService.get(args.filter ? `/fabric/Vsans?$filter=${args.filter}` : '/fabric/Vsans');
+        return this.apiService.get(args.filter ? `/fabric/Vsans?$filter=${encodeURIComponent(args.filter)}` : '/fabric/Vsans');
       
       case 'get_fabric_vsan':
         return this.apiService.get(`/fabric/Vsans/${args.moid}`);
@@ -3899,7 +3910,7 @@ export class IntersightMCPServer {
 
       // Configuration Management - IP Pool Blocks
       case 'list_ippool_blocks':
-        return this.apiService.get(args.filter ? `/ippool/Blocks?$filter=${args.filter}` : '/ippool/Blocks');
+        return this.apiService.get(args.filter ? `/ippool/Blocks?$filter=${encodeURIComponent(args.filter)}` : '/ippool/Blocks');
       
       case 'get_ippool_block':
         return this.apiService.get(`/ippool/Blocks/${args.moid}`);
@@ -3925,7 +3936,7 @@ export class IntersightMCPServer {
 
       // Configuration Management - MAC Pool Blocks
       case 'list_macpool_blocks':
-        return this.apiService.get(args.filter ? `/macpool/Blocks?$filter=${args.filter}` : '/macpool/Blocks');
+        return this.apiService.get(args.filter ? `/macpool/Blocks?$filter=${encodeURIComponent(args.filter)}` : '/macpool/Blocks');
       
       case 'get_macpool_block':
         return this.apiService.get(`/macpool/Blocks/${args.moid}`);
@@ -3951,7 +3962,7 @@ export class IntersightMCPServer {
 
       // Configuration Management - FC Pool Blocks
       case 'list_fcpool_blocks':
-        return this.apiService.get(args.filter ? `/fcpool/Blocks?$filter=${args.filter}` : '/fcpool/Blocks');
+        return this.apiService.get(args.filter ? `/fcpool/Blocks?$filter=${encodeURIComponent(args.filter)}` : '/fcpool/Blocks');
       
       case 'get_fcpool_block':
         return this.apiService.get(`/fcpool/Blocks/${args.moid}`);
@@ -3977,17 +3988,17 @@ export class IntersightMCPServer {
 
       // Advanced Networking - Fabric Uplink/Server Ports
       case 'list_fabric_uplink_ports':
-        return this.apiService.get(args.filter ? `/fabric/UplinkPcRoles?$filter=${args.filter}` : '/fabric/UplinkPcRoles');
+        return this.apiService.get(args.filter ? `/fabric/UplinkPcRoles?$filter=${encodeURIComponent(args.filter)}` : '/fabric/UplinkPcRoles');
       
       case 'list_fabric_server_ports':
-        return this.apiService.get(args.filter ? `/fabric/ServerRoles?$filter=${args.filter}` : '/fabric/ServerRoles');
+        return this.apiService.get(args.filter ? `/fabric/ServerRoles?$filter=${encodeURIComponent(args.filter)}` : '/fabric/ServerRoles');
       
       case 'list_fabric_port_operations':
-        return this.apiService.get(args.filter ? `/fabric/PortOperations?$filter=${args.filter}` : '/fabric/PortOperations');
+        return this.apiService.get(args.filter ? `/fabric/PortOperations?$filter=${encodeURIComponent(args.filter)}` : '/fabric/PortOperations');
 
       // Network Control Policies
       case 'list_fabric_flow_control_policies':
-        return this.apiService.get(args.filter ? `/fabric/FlowControlPolicies?$filter=${args.filter}` : '/fabric/FlowControlPolicies');
+        return this.apiService.get(args.filter ? `/fabric/FlowControlPolicies?$filter=${encodeURIComponent(args.filter)}` : '/fabric/FlowControlPolicies');
       
       case 'get_fabric_flow_control_policy':
         return this.apiService.get(`/fabric/FlowControlPolicies/${args.moid}`);
@@ -4013,7 +4024,7 @@ export class IntersightMCPServer {
         return this.apiService.delete(`/fabric/FlowControlPolicies/${args.moid}`);
       
       case 'list_fabric_link_control_policies':
-        return this.apiService.get(args.filter ? `/fabric/LinkControlPolicies?$filter=${args.filter}` : '/fabric/LinkControlPolicies');
+        return this.apiService.get(args.filter ? `/fabric/LinkControlPolicies?$filter=${encodeURIComponent(args.filter)}` : '/fabric/LinkControlPolicies');
       
       case 'get_fabric_link_control_policy':
         return this.apiService.get(`/fabric/LinkControlPolicies/${args.moid}`);
@@ -4037,7 +4048,7 @@ export class IntersightMCPServer {
         return this.apiService.delete(`/fabric/LinkControlPolicies/${args.moid}`);
       
       case 'list_fabric_lacp_policies':
-        return this.apiService.get(args.filter ? `/fabric/LinkAggregationPolicies?$filter=${args.filter}` : '/fabric/LinkAggregationPolicies');
+        return this.apiService.get(args.filter ? `/fabric/LinkAggregationPolicies?$filter=${encodeURIComponent(args.filter)}` : '/fabric/LinkAggregationPolicies');
       
       case 'get_fabric_lacp_policy':
         return this.apiService.get(`/fabric/LinkAggregationPolicies/${args.moid}`);
@@ -4062,13 +4073,13 @@ export class IntersightMCPServer {
         return this.apiService.delete(`/fabric/LinkAggregationPolicies/${args.moid}`);
       
       case 'list_fabric_system_qos_policies':
-        return this.apiService.get(args.filter ? `/fabric/SystemQosPolicies?$filter=${args.filter}` : '/fabric/SystemQosPolicies');
+        return this.apiService.get(args.filter ? `/fabric/SystemQosPolicies?$filter=${encodeURIComponent(args.filter)}` : '/fabric/SystemQosPolicies');
       
       case 'get_fabric_system_qos_policy':
         return this.apiService.get(`/fabric/SystemQosPolicies/${args.moid}`);
       
       case 'list_fabric_multicast_policies':
-        return this.apiService.get(args.filter ? `/fabric/MulticastPolicies?$filter=${args.filter}` : '/fabric/MulticastPolicies');
+        return this.apiService.get(args.filter ? `/fabric/MulticastPolicies?$filter=${encodeURIComponent(args.filter)}` : '/fabric/MulticastPolicies');
       
       case 'get_fabric_multicast_policy':
         return this.apiService.get(`/fabric/MulticastPolicies/${args.moid}`);
@@ -4095,19 +4106,19 @@ export class IntersightMCPServer {
 
       // Hardware Security & Management
       case 'list_equipment_tpms':
-        return this.apiService.get(args.filter ? `/equipment/Tpms?$filter=${args.filter}` : '/equipment/Tpms');
+        return this.apiService.get(args.filter ? `/equipment/Tpms?$filter=${encodeURIComponent(args.filter)}` : '/equipment/Tpms');
       
       case 'get_equipment_tpm':
         return this.apiService.get(`/equipment/Tpms/${args.moid}`);
       
       case 'list_boot_device_boot_modes':
-        return this.apiService.get(args.filter ? `/boot/DeviceBootModes?$filter=${args.filter}` : '/boot/DeviceBootModes');
+        return this.apiService.get(args.filter ? `/boot/DeviceBootModes?$filter=${encodeURIComponent(args.filter)}` : '/boot/DeviceBootModes');
       
       case 'list_boot_device_boot_securities':
-        return this.apiService.get(args.filter ? `/boot/DeviceBootSecurities?$filter=${args.filter}` : '/boot/DeviceBootSecurities');
+        return this.apiService.get(args.filter ? `/boot/DeviceBootSecurities?$filter=${encodeURIComponent(args.filter)}` : '/boot/DeviceBootSecurities');
       
       case 'list_storage_local_disk_policies':
-        return this.apiService.get(args.filter ? `/storage/StoragePolicies?$filter=${args.filter}` : '/storage/StoragePolicies');
+        return this.apiService.get(args.filter ? `/storage/StoragePolicies?$filter=${encodeURIComponent(args.filter)}` : '/storage/StoragePolicies');
       
       case 'get_storage_local_disk_policy':
         return this.apiService.get(`/storage/StoragePolicies/${args.moid}`);
@@ -4131,7 +4142,7 @@ export class IntersightMCPServer {
         return this.apiService.delete(`/storage/StoragePolicies/${args.moid}`);
       
       case 'list_sdcard_policies':
-        return this.apiService.get(args.filter ? `/sdcard/Policies?$filter=${args.filter}` : '/sdcard/Policies');
+        return this.apiService.get(args.filter ? `/sdcard/Policies?$filter=${encodeURIComponent(args.filter)}` : '/sdcard/Policies');
       
       case 'get_sdcard_policy':
         return this.apiService.get(`/sdcard/Policies/${args.moid}`);
@@ -4154,7 +4165,7 @@ export class IntersightMCPServer {
         return this.apiService.delete(`/sdcard/Policies/${args.moid}`);
       
       case 'list_kvm_policies':
-        return this.apiService.get(args.filter ? `/kvm/Policies?$filter=${args.filter}` : '/kvm/Policies');
+        return this.apiService.get(args.filter ? `/kvm/Policies?$filter=${encodeURIComponent(args.filter)}` : '/kvm/Policies');
       
       case 'get_kvm_policy':
         return this.apiService.get(`/kvm/Policies/${args.moid}`);
@@ -4180,7 +4191,7 @@ export class IntersightMCPServer {
         return this.apiService.delete(`/kvm/Policies/${args.moid}`);
       
       case 'list_virtual_media_policies':
-        return this.apiService.get(args.filter ? `/vmedia/Policies?$filter=${args.filter}` : '/vmedia/Policies');
+        return this.apiService.get(args.filter ? `/vmedia/Policies?$filter=${encodeURIComponent(args.filter)}` : '/vmedia/Policies');
       
       case 'get_virtual_media_policy':
         return this.apiService.get(`/vmedia/Policies/${args.moid}`);
@@ -4205,7 +4216,7 @@ export class IntersightMCPServer {
 
       // System Policies
       case 'list_snmp_policies':
-        return this.apiService.get(args.filter ? `/snmp/Policies?$filter=${args.filter}` : '/snmp/Policies');
+        return this.apiService.get(args.filter ? `/snmp/Policies?$filter=${encodeURIComponent(args.filter)}` : '/snmp/Policies');
       
       case 'get_snmp_policy':
         return this.apiService.get(`/snmp/Policies/${args.moid}`);
@@ -4230,7 +4241,7 @@ export class IntersightMCPServer {
         return this.apiService.delete(`/snmp/Policies/${args.moid}`);
       
       case 'list_syslog_policies':
-        return this.apiService.get(args.filter ? `/syslog/Policies?$filter=${args.filter}` : '/syslog/Policies');
+        return this.apiService.get(args.filter ? `/syslog/Policies?$filter=${encodeURIComponent(args.filter)}` : '/syslog/Policies');
       
       case 'get_syslog_policy':
         return this.apiService.get(`/syslog/Policies/${args.moid}`);
@@ -4253,7 +4264,7 @@ export class IntersightMCPServer {
         return this.apiService.delete(`/syslog/Policies/${args.moid}`);
       
       case 'list_ntp_policies':
-        return this.apiService.get(args.filter ? `/ntp/Policies?$filter=${args.filter}` : '/ntp/Policies');
+        return this.apiService.get(args.filter ? `/ntp/Policies?$filter=${encodeURIComponent(args.filter)}` : '/ntp/Policies');
       
       case 'get_ntp_policy':
         return this.apiService.get(`/ntp/Policies/${args.moid}`);
@@ -4279,7 +4290,7 @@ export class IntersightMCPServer {
         return this.apiService.delete(`/ntp/Policies/${args.moid}`);
       
       case 'list_smtp_policies':
-        return this.apiService.get(args.filter ? `/smtp/Policies?$filter=${args.filter}` : '/smtp/Policies');
+        return this.apiService.get(args.filter ? `/smtp/Policies?$filter=${encodeURIComponent(args.filter)}` : '/smtp/Policies');
       
       case 'get_smtp_policy':
         return this.apiService.get(`/smtp/Policies/${args.moid}`);
@@ -4305,13 +4316,13 @@ export class IntersightMCPServer {
         return this.apiService.delete(`/smtp/Policies/${args.moid}`);
       
       case 'list_deviceconnector_policies':
-        return this.apiService.get(args.filter ? `/deviceconnector/Policies?$filter=${args.filter}` : '/deviceconnector/Policies');
+        return this.apiService.get(args.filter ? `/deviceconnector/Policies?$filter=${encodeURIComponent(args.filter)}` : '/deviceconnector/Policies');
       
       case 'get_deviceconnector_policy':
         return this.apiService.get(`/deviceconnector/Policies/${args.moid}`);
       
       case 'list_certificatemanagement_policies':
-        return this.apiService.get(args.filter ? `/certificatemanagement/Policies?$filter=${args.filter}` : '/certificatemanagement/Policies');
+        return this.apiService.get(args.filter ? `/certificatemanagement/Policies?$filter=${encodeURIComponent(args.filter)}` : '/certificatemanagement/Policies');
       
       case 'get_certificatemanagement_policy':
         return this.apiService.get(`/certificatemanagement/Policies/${args.moid}`);
@@ -4376,6 +4387,7 @@ export class IntersightMCPServer {
 
       // Search & Query
       case 'search_resources':
+        assertResourceType(args.resourceType);
         return this.apiService.searchResources(args.resourceType, args.filter);
 
       // Telemetry & Metrics
@@ -4417,106 +4429,106 @@ export class IntersightMCPServer {
 
       // Hardware Compatibility List (HCL)
       case 'list_hcl_operating_systems':
-        return this.apiService.get(args.filter ? `/hcl/OperatingSystems?$filter=${args.filter}` : '/hcl/OperatingSystems');
+        return this.apiService.get(args.filter ? `/hcl/OperatingSystems?$filter=${encodeURIComponent(args.filter)}` : '/hcl/OperatingSystems');
       
       case 'list_hcl_operating_system_vendors':
-        return this.apiService.get(args.filter ? `/hcl/OperatingSystemVendors?$filter=${args.filter}` : '/hcl/OperatingSystemVendors');
+        return this.apiService.get(args.filter ? `/hcl/OperatingSystemVendors?$filter=${encodeURIComponent(args.filter)}` : '/hcl/OperatingSystemVendors');
       
       case 'list_hcl_hyperflex_compatibility':
-        return this.apiService.get(args.filter ? `/hcl/HyperflexSoftwareCompatibilityInfos?$filter=${args.filter}` : '/hcl/HyperflexSoftwareCompatibilityInfos');
+        return this.apiService.get(args.filter ? `/hcl/HyperflexSoftwareCompatibilityInfos?$filter=${encodeURIComponent(args.filter)}` : '/hcl/HyperflexSoftwareCompatibilityInfos');
 
       // Technical Advisory Management (TAM)
       case 'list_tam_advisories':
-        return this.apiService.get(args.filter ? `/tam/AdvisoryDefinitions?$filter=${args.filter}` : '/tam/AdvisoryDefinitions');
+        return this.apiService.get(args.filter ? `/tam/AdvisoryDefinitions?$filter=${encodeURIComponent(args.filter)}` : '/tam/AdvisoryDefinitions');
       
       case 'get_tam_advisory':
         return this.apiService.get(`/tam/AdvisoryDefinitions/${args.moid}`);
       
       case 'list_tam_advisory_instances':
-        return this.apiService.get(args.filter ? `/tam/AdvisoryInstances?$filter=${args.filter}` : '/tam/AdvisoryInstances');
+        return this.apiService.get(args.filter ? `/tam/AdvisoryInstances?$filter=${encodeURIComponent(args.filter)}` : '/tam/AdvisoryInstances');
       
       case 'list_tam_security_advisories':
-        return this.apiService.get(args.filter ? `/tam/SecurityAdvisories?$filter=${args.filter}` : '/tam/SecurityAdvisories');
+        return this.apiService.get(args.filter ? `/tam/SecurityAdvisories?$filter=${encodeURIComponent(args.filter)}` : '/tam/SecurityAdvisories');
       
       case 'get_tam_advisory_count':
         return this.apiService.get('/tam/AdvisoryCounts');
 
       // Terminal & Systems
       case 'list_terminal_audit_logs':
-        return this.apiService.get(args.filter ? `/terminal/AuditLogs?$filter=${args.filter}` : '/terminal/AuditLogs');
+        return this.apiService.get(args.filter ? `/terminal/AuditLogs?$filter=${encodeURIComponent(args.filter)}` : '/terminal/AuditLogs');
       
       case 'list_top_systems':
-        return this.apiService.get(args.filter ? `/top/Systems?$filter=${args.filter}` : '/top/Systems');
+        return this.apiService.get(args.filter ? `/top/Systems?$filter=${encodeURIComponent(args.filter)}` : '/top/Systems');
       
       case 'get_top_system':
         return this.apiService.get(`/top/Systems/${args.moid}`);
 
       // Compute Inventory
       case 'list_compute_blades':
-        return this.apiService.get(args.filter ? `/compute/Blades?$filter=${args.filter}` : '/compute/Blades');
+        return this.apiService.get(args.filter ? `/compute/Blades?$filter=${encodeURIComponent(args.filter)}` : '/compute/Blades');
       
       case 'list_compute_rack_units':
-        return this.apiService.get(args.filter ? `/compute/RackUnits?$filter=${args.filter}` : '/compute/RackUnits');
+        return this.apiService.get(args.filter ? `/compute/RackUnits?$filter=${encodeURIComponent(args.filter)}` : '/compute/RackUnits');
       
       case 'list_compute_boards':
-        return this.apiService.get(args.filter ? `/compute/Boards?$filter=${args.filter}` : '/compute/Boards');
+        return this.apiService.get(args.filter ? `/compute/Boards?$filter=${encodeURIComponent(args.filter)}` : '/compute/Boards');
 
       // Storage
       case 'list_storage_virtual_drives':
-        return this.apiService.get(args.filter ? `/storage/VirtualDrives?$filter=${args.filter}` : '/storage/VirtualDrives');
+        return this.apiService.get(args.filter ? `/storage/VirtualDrives?$filter=${encodeURIComponent(args.filter)}` : '/storage/VirtualDrives');
       
       case 'list_storage_flex_flash_controllers':
-        return this.apiService.get(args.filter ? `/storage/FlexFlashControllers?$filter=${args.filter}` : '/storage/FlexFlashControllers');
+        return this.apiService.get(args.filter ? `/storage/FlexFlashControllers?$filter=${encodeURIComponent(args.filter)}` : '/storage/FlexFlashControllers');
       
       case 'list_storage_flex_flash_drives':
-        return this.apiService.get(args.filter ? `/storage/FlexFlashPhysicalDrives?$filter=${args.filter}` : '/storage/FlexFlashPhysicalDrives');
+        return this.apiService.get(args.filter ? `/storage/FlexFlashPhysicalDrives?$filter=${encodeURIComponent(args.filter)}` : '/storage/FlexFlashPhysicalDrives');
 
       // Equipment
       case 'list_equipment_io_cards':
-        return this.apiService.get(args.filter ? `/equipment/IoCards?$filter=${args.filter}` : '/equipment/IoCards');
+        return this.apiService.get(args.filter ? `/equipment/IoCards?$filter=${encodeURIComponent(args.filter)}` : '/equipment/IoCards');
       
       case 'list_equipment_sys_io_ctrls':
-        return this.apiService.get(args.filter ? `/equipment/SystemIoControllers?$filter=${args.filter}` : '/equipment/SystemIoControllers');
+        return this.apiService.get(args.filter ? `/equipment/SystemIoControllers?$filter=${encodeURIComponent(args.filter)}` : '/equipment/SystemIoControllers');
 
       // Firmware
       case 'list_firmware_running':
-        return this.apiService.get(args.filter ? `/firmware/RunningFirmwares?$filter=${args.filter}` : '/firmware/RunningFirmwares');
+        return this.apiService.get(args.filter ? `/firmware/RunningFirmwares?$filter=${encodeURIComponent(args.filter)}` : '/firmware/RunningFirmwares');
       
       case 'list_firmware_upgrades':
-        return this.apiService.get(args.filter ? `/firmware/Upgrades?$filter=${args.filter}` : '/firmware/Upgrades');
+        return this.apiService.get(args.filter ? `/firmware/Upgrades?$filter=${encodeURIComponent(args.filter)}` : '/firmware/Upgrades');
 
       // License
       case 'list_licenses':
-        return this.apiService.get(args.filter ? `/license/LicenseInfos?$filter=${args.filter}` : '/license/LicenseInfos');
+        return this.apiService.get(args.filter ? `/license/LicenseInfos?$filter=${encodeURIComponent(args.filter)}` : '/license/LicenseInfos');
 
       // Workflow
       case 'list_workflows':
-        return this.apiService.get(args.filter ? `/workflow/WorkflowInfos?$filter=${args.filter}` : '/workflow/WorkflowInfos');
+        return this.apiService.get(args.filter ? `/workflow/WorkflowInfos?$filter=${encodeURIComponent(args.filter)}` : '/workflow/WorkflowInfos');
       
       case 'get_workflow':
         return this.apiService.get(`/workflow/WorkflowInfos/${args.moid}`);
       
       case 'list_workflow_tasks':
-        return this.apiService.get(args.filter ? `/workflow/TaskInfos?$filter=${args.filter}` : '/workflow/TaskInfos');
+        return this.apiService.get(args.filter ? `/workflow/TaskInfos?$filter=${encodeURIComponent(args.filter)}` : '/workflow/TaskInfos');
 
       // PCI Devices
       case 'list_pci_devices':
-        return this.apiService.get(args.filter ? `/pci/Devices?$filter=${args.filter}` : '/pci/Devices');
+        return this.apiService.get(args.filter ? `/pci/Devices?$filter=${encodeURIComponent(args.filter)}` : '/pci/Devices');
 
       // Graphics
       case 'list_graphics_cards':
-        return this.apiService.get(args.filter ? `/graphics/Cards?$filter=${args.filter}` : '/graphics/Cards');
+        return this.apiService.get(args.filter ? `/graphics/Cards?$filter=${encodeURIComponent(args.filter)}` : '/graphics/Cards');
 
       // BIOS
       case 'list_bios_units':
-        return this.apiService.get(args.filter ? `/bios/Units?$filter=${args.filter}` : '/bios/Units');
+        return this.apiService.get(args.filter ? `/bios/Units?$filter=${encodeURIComponent(args.filter)}` : '/bios/Units');
 
       // Management
       case 'list_management_controllers':
-        return this.apiService.get(args.filter ? `/management/Controllers?$filter=${args.filter}` : '/management/Controllers');
+        return this.apiService.get(args.filter ? `/management/Controllers?$filter=${encodeURIComponent(args.filter)}` : '/management/Controllers');
       
       case 'list_management_interfaces':
-        return this.apiService.get(args.filter ? `/management/Interfaces?$filter=${args.filter}` : '/management/Interfaces');
+        return this.apiService.get(args.filter ? `/management/Interfaces?$filter=${encodeURIComponent(args.filter)}` : '/management/Interfaces');
 
       // PowerShell Examples
       case 'get_powershell_examples':
