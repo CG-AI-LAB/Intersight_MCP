@@ -29,7 +29,8 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { IntersightApiService } from './services/intersightApi.js';
 import { loadConfig, loadMCPServerConfig, isToolEnabled, getEnabledTools, MCPServerConfig } from './utils/config.js';
-import { createSecurityHealthCheckReport } from './services/securityHealthCheckAgent.js';
+import { generateSecurityHealthReport } from './services/securityHealthCheckAgent.js';
+import { getTopResources } from './services/telemetry.js';
 import { validateMoidArgs, assertPolicyType, assertPoolType, assertResourceType } from './utils/validation.js';
 
 export class IntersightMCPServer {
@@ -2980,23 +2981,27 @@ export class IntersightMCPServer {
       },
       {
         name: 'get_top_resources',
-        description: 'Get top N resources by metric (CPU, memory, power, temperature). Useful for finding highest utilization, hottest servers, power consumption leaders, etc.',
+        description: 'Get the top N servers or chassis by a telemetry metric (CPU utilization, power draw, temperature) over a recent time window. Useful for finding the busiest servers, hottest servers and biggest power consumers. Requires an Intersight Essentials or higher license; Intersight does not report per-server memory utilization.',
         inputSchema: {
           type: 'object',
           properties: {
             metricName: {
               type: 'string',
-              description: 'Metric to rank by: CpuUtilization, MemoryUtilization, PowerConsumption, Temperature',
-              enum: ['CpuUtilization', 'MemoryUtilization', 'PowerConsumption', 'Temperature'],
+              description: 'Metric to rank by: CpuUtilization (servers only, %), PowerConsumption (average W), Temperature (hottest sensor, °C)',
+              enum: ['CpuUtilization', 'PowerConsumption', 'Temperature'],
             },
             topN: {
               type: 'number',
-              description: 'Number of top resources to return (default: 10)',
+              description: 'Number of top resources to return (default: 10, max: 100)',
             },
             resourceType: {
               type: 'string',
               description: 'Type of resource: Server, Chassis, or All (default: Server)',
               enum: ['Server', 'Chassis', 'All'],
+            },
+            windowMinutes: {
+              type: 'number',
+              description: 'How far back to look, in minutes (default: 60, min: 10)',
             },
           },
           required: ['metricName'],
@@ -3495,7 +3500,7 @@ export class IntersightMCPServer {
       // Security & Health Check Agent
       {
         name: 'generate_security_health_report',
-        description: 'Generate a comprehensive security and health check report for the entire Intersight infrastructure. Analyzes alarms, advisories, CVEs, firmware, hardware health, security posture, compliance, and performance. Returns actionable recommendations prioritized by urgency.',
+        description: 'Generate a security and health check report for the entire Intersight environment: device health, active alarms, security advisories/field notices/EOL notices that apply to this environment, firmware version drift, licensing, Secure Boot and TPM posture, HCL compliance, and power/temperature/CPU telemetry. Recommendations are derived from the findings and prioritized by severity. Sources that could not be read are listed in dataGaps.',
         inputSchema: {
           type: 'object',
           properties: {},
@@ -4425,7 +4430,7 @@ export class IntersightMCPServer {
         return this.apiService.listPsuUnits(args.chassisMoid);
       
       case 'get_top_resources':
-        return this.apiService.getTopResources(args.metricName, args.topN, args.resourceType);
+        return getTopResources(this.apiService, args.metricName, args.topN, args.resourceType, args.windowMinutes);
 
       // Hardware Compatibility List (HCL)
       case 'list_hcl_operating_systems':
@@ -4548,110 +4553,7 @@ export class IntersightMCPServer {
 
       // Security & Health Check Report
       case 'generate_security_health_report':
-        console.error('🔍 Generating Security & Health Check Report...');
-        
-        // Collect all necessary data from Intersight API
-        const [
-          alarms,
-          advisoryCount,
-          advisories,
-          advisoryInstances,
-          firmware,
-          operatingSystems,
-          licenses,
-          tpms,
-          bootSecurity,
-          policies,
-          hyperflexCompat,
-          processors,
-          memoryUnits,
-          physicalDrives,
-          psuUnits,
-          fanModules,
-        ] = await Promise.all([
-          this.apiService.listAlarms('').catch(() => ({ Results: [] })),
-          this.apiService.get('/tam/AdvisoryCounts').catch(() => ({ critical: 0, warning: 0, info: 0 })),
-          this.apiService.get('/tam/AdvisoryDefinitions').catch(() => ({ Results: [] })),
-          this.apiService.get('/tam/AdvisoryInstances').catch(() => ({ Results: [] })),
-          this.apiService.get('/firmware/RunningFirmwares').catch(() => ({ Results: [] })),
-          this.apiService.get('/hcl/OperatingSystems').catch(() => ({ Results: [] })),
-          this.apiService.get('/license/LicenseInfos').catch(() => ({ Results: [] })),
-          this.apiService.get('/equipment/Tpms').catch(() => ({ Results: [] })),
-          this.apiService.get('/boot/DeviceBootSecurities').catch(() => ({ Results: [] })),
-          this.apiService.listPolicies('all').catch(() => ({ Results: [] })),
-          this.apiService.get('/hcl/HyperflexSoftwareCompatibilityInfos').catch(() => ({ Results: [] })),
-          this.apiService.get('/processor/Units').catch(() => ({ Results: [] })),
-          this.apiService.get('/memory/Units').catch(() => ({ Results: [] })),
-          this.apiService.get('/storage/PhysicalDisks').catch(() => ({ Results: [] })),
-          this.apiService.get('/equipment/Psus').catch(() => ({ Results: [] })),
-          this.apiService.get('/equipment/FanModules').catch(() => ({ Results: [] })),
-        ]);
-
-        // Get thermal and power data from actual servers
-        const thermalData = await this.apiService.get('/compute/PhysicalSummaries?$select=Moid,Name,Temperature').catch(() => ({ Results: [] }));
-        const powerData = await this.apiService.get('/compute/PhysicalSummaries?$select=Moid,Name,AllocatedPower,PowerState').catch(() => ({ Results: [] }));
-        
-        // Get all servers for MOID-to-name resolution
-        const allServers = await this.apiService.get('/compute/PhysicalSummaries?$select=Moid,Name,Model,Serial').catch(() => ({ Results: [] }));
-
-        // Get top resources for performance analysis
-        const topCpuServers = await this.apiService.get('/compute/PhysicalSummaries?$top=5&$orderby=CpuCapacity desc').catch(() => ({ Results: [] }));
-        const topMemServers = await this.apiService.get('/compute/PhysicalSummaries?$top=5&$orderby=TotalMemory desc').catch(() => ({ Results: [] }));
-        const topPowerServers = await this.apiService.get('/compute/PhysicalSummaries?$top=5&$orderby=AllocatedPower desc').catch(() => ({ Results: [] }));
-        
-        const topResources = [
-          ...(topCpuServers?.Results || []).map((s: any) => ({ ...s, metric: 'cpu' })),
-          ...(topMemServers?.Results || []).map((s: any) => ({ ...s, metric: 'memory' })),
-          ...(topPowerServers?.Results || []).map((s: any) => ({ ...s, metric: 'power' }))
-        ];
-
-        // Build hardware health object from real data
-        const hardwareData = {
-          processors: processors?.Results || [],
-          memory: memoryUnits?.Results || [],
-          drives: physicalDrives?.Results || [],
-          psus: psuUnits?.Results || [],
-          fans: fanModules?.Results || [],
-        };
-
-        const thermalStats = {
-          averageTemp: thermalData?.Results?.reduce((sum: number, s: any) => sum + (s.Temperature || 0), 0) / (thermalData?.Results?.length || 1),
-          servers: thermalData?.Results || [],
-        };
-
-        const powerStats = {
-          totalPower: powerData?.Results?.reduce((sum: number, s: any) => sum + (s.AllocatedPower || 0), 0),
-          servers: powerData?.Results || [],
-        };
-
-        // Generate the comprehensive report with real Intersight data
-        const report = createSecurityHealthCheckReport(
-          alarms?.Results || [],
-          advisories?.Results || [],
-          advisoryInstances?.Results || [],
-          advisoryCount,
-          firmware?.Results || [],
-          operatingSystems?.Results || [],
-          hardwareData,
-          thermalStats,
-          powerStats,
-          licenses?.Results || [],
-          tpms?.Results || [],
-          bootSecurity?.Results || [],
-          policies?.Results || [],
-          hyperflexCompat?.Results?.[0] || null,
-          topResources,
-          allServers?.Results || []
-        );
-
-        console.error('✅ Security & Health Check Report generated successfully');
-        console.error('📊 Report includes:');
-        console.error(`   - ${report.alarms.total} alarms analyzed (${report.alarms.critical} critical)`);
-        console.error(`   - ${report.advisories.total} advisories reviewed (${report.advisories.fieldNotices} field notices, ${report.advisories.eolAdvisories} EOL)`);
-        console.error(`   - ${report.firmware.components} firmware components checked`);
-        console.error(`   - ${report.summary.infrastructureOverview.totalServers} servers assessed`);
-        console.error(`   - All affected devices tracked and resolved by name`);
-        return report;
+        return generateSecurityHealthReport(this.apiService);
 
       default:
         throw new Error(`Unknown tool: ${name}`);
