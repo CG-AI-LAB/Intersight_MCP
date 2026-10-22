@@ -1,412 +1,125 @@
-# Security & Health Check Agent Implementation Guide
+# Security & Health Check Agent
 
 ## Overview
 
-The Security & Health Check Agent (`securityHealthCheckAgent.ts`) provides automated, comprehensive infrastructure analysis through a single unified tool: `generate_security_health_report`. This agent ensures consistent, thorough reporting across all security and health check requests.
+`generate_security_health_report` builds a security and health report for the whole Intersight environment from live Intersight data. The implementation is in [securityHealthCheckAgent.ts](src/services/securityHealthCheckAgent.ts), with metrics from [telemetry.ts](src/services/telemetry.ts).
 
-## What It Does
+Every figure in the report comes from Intersight. If a source can't be read (for example, the credential's role can't see it), the source is listed in `dataGaps` and that section is reported as unavailable with null scores. A failed source is never reported as zero findings.
 
-When triggered, the agent automatically orchestrates **13+ data collection phases** in parallel:
+## Data Sources
 
-1. ✅ **Collects Alarms** - Active critical, warning, and info alarms across all infrastructure
-2. ✅ **Analyzes Advisories** - Technical advisories, field notices, CVEs from TAM (both definitions and instances)
-3. ✅ **Checks Firmware** - Current versions, updates, EOL status, inconsistencies across all components
-4. ✅ **Assesses Hardware** - Real-time processor, memory, drives, PSUs, fans health from live data
-5. ✅ **Monitors Thermal** - Temperature data from all compute resources with thresholds
-6. ✅ **Tracks Power** - Power allocation and consumption across infrastructure
-7. ✅ **Evaluates Security** - TPM status, Secure Boot configuration, license compliance
-8. ✅ **Reviews Compliance** - Policy adherence, certified OS versions, HyperFlex compatibility
-9. ✅ **Analyzes Performance** - Top CPU, memory, and power consumers with real resource data
-10. ✅ **Generates Scores** - Overall, security, health, and compliance scores (0-100)
-11. ✅ **Categorizes Issues** - Problems sorted by severity (CRITICAL, HIGH, MEDIUM, LOW)
-12. ✅ **Recommends Actions** - Four-tier guidance (Immediate, Short-term, Medium-term, Long-term)
-13. ✅ **Provides Context** - Server-to-MOID resolution and infrastructure overview
+Each collection is read in full: the agent pages through `$top`/`$skip` instead of stopping at the API's default 100 results.
 
-## Current Implementation
+| Report section | Intersight source | What is used |
+|---|---|---|
+| Device health | `compute/PhysicalSummaries`, `network/ElementSummaries` | `AlarmSummary.Health` (Healthy / Warning / Critical), Intersight's roll-up of each device's active alarms |
+| Component state | `processor/Units`, `memory/Units`, `storage/PhysicalDisks`, `equipment/Psus`, `equipment/FanModules` | `OperState` / `DiskState` of installed (`Presence` equipped) components |
+| Alarms | `cond/Alarms` with `Severity ne 'Cleared'` | Severity, acknowledgement, suppression, affected object |
+| Advisories | `tam/AdvisoryInstances` with `State eq 'active'`, `$expand=Advisory` | Security advisories (PSIRT, with CVEs and CVSS base score), field notices and end-of-life notices that apply to this environment, with the affected devices |
+| Firmware | `Firmware` on servers, `Version` on fabric interconnects | Version distribution per model and version drift |
+| Licensing | `license/LicenseInfos` | `LicenseState` per license tier in use, `DaysLeft` for trials |
+| Secure Boot | `boot/DeviceBootSecurities` | `SecureBoot` as configured in each server's boot policy |
+| TPM | `equipment/Tpms` | Installed TPMs, tied to servers through `Ancestors` |
+| HCL compliance | `cond/HclStatuses` | Per-server HCL `Status` and `ServerReason` |
+| Power, temperature, CPU | `POST telemetry/TimeSeries` (Druid groupBy on `PhysicalEntities`) | Average and peak power (`hw.host`), hottest sensor (`hw.temperature`), CPU C0 utilization (`hw.cpu`) over the last 60 minutes |
 
-### Tool Registration
+## Requirements and Limitations
 
-The agent is implemented as a single comprehensive tool:
-
-```typescript
-{
-  name: 'generate_security_health_report',
-  description: 'Generate a comprehensive security and health check report for the entire Intersight infrastructure. Analyzes alarms, advisories, CVEs, firmware, hardware health, security posture, compliance, and performance. Returns actionable recommendations prioritized by urgency.',
-  inputSchema: {
-    type: 'object',
-    properties: {},
-  },
-}
-```
-
-### Agent Status
-
-✅ **ACTIVE**: The agent is currently implemented and deployed
-✅ **CORE TOOLS**: Available in both core (66 tools) and all (199+ tools) modes  
-✅ **PRODUCTION READY**: Includes comprehensive error handling and null safety
-✅ **REAL-TIME DATA**: Pulls live data from 16+ Intersight API endpoints
-
-### Data Collection Process
-
-The agent performs parallel data collection from these endpoints:
-
-```typescript
-const [
-  alarms,                    // /condition/AlarmSummaries
-  advisoryCount,            // /tam/AdvisoryCounts  
-  advisories,               // /tam/AdvisoryDefinitions
-  advisoryInstances,        // /tam/AdvisoryInstances
-  firmware,                 // /firmware/RunningFirmwares
-  operatingSystems,         // /hcl/OperatingSystems
-  licenses,                 // /license/LicenseInfos
-  tpms,                     // /equipment/Tpms
-  bootSecurity,             // /boot/DeviceBootSecurities
-  policies,                 // Multiple policy endpoints
-  hyperflexCompat,          // /hcl/HyperflexSoftwareCompatibilityInfos
-  processors,               // /processor/Units
-  memoryUnits,              // /memory/Units
-  physicalDrives,           // /storage/PhysicalDisks
-  psuUnits,                 // /equipment/Psus
-  fanModules,               // /equipment/FanModules
-] = await Promise.all([...]);
-
-// Additional thermal and performance data
-const thermalData = await this.apiService.get('/compute/PhysicalSummaries?$select=Moid,Name,Temperature');
-const powerData = await this.apiService.get('/compute/PhysicalSummaries?$select=Moid,Name,AllocatedPower,PowerState');
-const topCpuServers = await this.apiService.get('/compute/PhysicalSummaries?$top=5&$orderby=CpuCapacity desc');
-const topMemServers = await this.apiService.get('/compute/PhysicalSummaries?$top=5&$orderby=TotalMemory desc');
-const topPowerServers = await this.apiService.get('/compute/PhysicalSummaries?$top=5&$orderby=AllocatedPower desc');
-```
-
-### Error Handling
-
-The implementation includes comprehensive error handling:
-- All API calls wrapped in `.catch()` with fallback empty results
-- Null safety checks throughout data processing
-- Graceful degradation when endpoints are unavailable
-- Status field indicates SUCCESS/PARTIAL/ERROR based on data completeness
+- **Role:** Read-Only is sufficient for every source, including telemetry.
+- **Telemetry license:** metrics need an Intersight Essentials or higher license. Without one, the performance section reports no samples.
+- **CPU utilization coverage:** collected for Intersight-managed (IMM) servers and standalone M7 or newer servers. UCS Manager domains report environmental metrics (power, temperature) only.
+- **Memory utilization:** Intersight does not report per-server memory utilization, so the report doesn't either.
+- **Recommended firmware:** Intersight does not expose a recommended version per device. The firmware section shows version drift; updates driven by security or end-of-life appear under advisories.
+- **TPM attribution:** servers are named as lacking a TPM only when every installed TPM can be tied to its server.
 
 ## Report Structure
 
-### Executive Summary
-- **overallScore** (0-100): Combined security, health, and compliance
-- **securityScore**: Based on advisories, CVEs, licenses, TPM
-- **healthScore**: Based on alarms, hardware failures, thermal/power status
-- **complianceScore**: Based on policies and OS certification
-- **criticalCount**: Total critical findings
-- **warningCount**: Total warning findings
+| Field | Contents |
+|---|---|
+| `status` | `SUCCESS` (all sources read), `PARTIAL` (some sources missing, see `dataGaps`), or `ERROR` (nothing could be read) |
+| `dataGaps` | `{source, error}` for each source that failed |
+| `summary` | `overallScore`, `securityScore`, `healthScore`, `complianceScore` (0-100, or null when the inputs are unavailable), `scoring` (how the scores are calculated), issue counts, and device/alarm/advisory totals |
+| `hardware` | Health counts and the least healthy servers and fabric interconnects; per-type component state counts, with unrecognized states listed in `otherStates` |
+| `alarms` | Counts by severity; acknowledged and suppressed counts; unacknowledged critical/warning counts; top alarms; alarms grouped by code and by device type |
+| `advisories` | Applicable advisories by type and severity; top advisories with CVEs, base score, link, recommendation and affected devices |
+| `firmware` | Versions per server and fabric interconnect model, and the models running more than one version |
+| `security` | `licensing`, `secureBoot` and `tpm` subsections |
+| `compliance` | HCL `overallStatus` (`COMPLIANT`, `PARTIAL`, `NON_COMPLIANT` or `UNKNOWN`), counts by status, and the servers that are not listed or not verified |
+| `performance` | Power (total and top consumers), temperature (hottest servers) and CPU utilization (fleet average and busiest servers) from telemetry |
+| `issues` | Findings with category, severity (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`), affected resources and remediation |
+| `recommendations` | The remediation for each issue, grouped by its severity: `immediate` (critical), `shortTerm` (high), `mediumTerm` (medium), `longTerm` (low) |
 
-### Alarms Section
-```json
-{
-  "critical": 2,
-  "warning": 5,
-  "info": 12,
-  "topAlarms": [
-    {
-      "id": "alarm-123",
-      "description": "CPU temperature critical",
-      "severity": "Critical"
-    }
-  ]
-}
-```
+## Scoring
 
-### Advisories Section
-```json
-{
-  "critical": 1,
-  "warning": 3,
-  "info": 8,
-  "securityAdvisories": 2,
-  "fieldNotices": 1,
-  "topAdvisories": [
-    {
-      "id": "adv-456",
-      "title": "CVE-2024-xxxxx affecting CIMC",
-      "type": "securityAdvisory"
-    }
-  ]
-}
-```
+- **Health:** the percentage of servers and fabric interconnects that Intersight rates Healthy, with Warning devices counting half.
+- **Security:** starts at 100, with these deductions:
+  - 15 per critical and 8 per high security advisory that applies, capped at 50 in total
+  - 15 if licensing is out of compliance
+  - up to 15 in proportion to the share of servers without Secure Boot
+  - up to 10 in proportion to the share of servers without a TPM
 
-### Firmware Section
-```json
-{
-  "components": 25,
-  "currentlySupported": 20,
-  "outdated": 4,
-  "endOfLife": 1,
-  "updateRecommendations": [
-    {
-      "component": "CIMC",
-      "currentVersion": "3.1.2",
-      "recommendedVersion": "4.0.1",
-      "securityCritical": true
-    }
-  ]
-}
-```
+  It is null when advisories can't be read.
+- **Compliance:** the percentage of evaluated servers whose hardware, firmware and OS combination is HCL-validated (or not applicable).
+- **Overall:** the mean of the scores that are available.
 
-### Security Section
-```json
-{
-  "tpmStatus": "PRESENT",
-  "secureBootEnabled": true,
-  "licenseCompliance": "COMPLIANT",
-  "expiredLicenses": 0,
-  "expiringLicenses": 2,
-  "managementControllersUnreachable": 0
-}
-```
+## Issues Raised
 
-### Recommendations Section
-```json
-{
-  "immediate": [
-    "Resolve 2 critical alarms immediately",
-    "Apply critical security firmware updates",
-    "Address 1 critical security advisory"
-  ],
-  "shortTerm": [
-    "Update 4 outdated firmware components",
-    "Enable Secure Boot on all servers",
-    "Renew 2 licenses expiring soon"
-  ],
-  "mediumTerm": [
-    "Implement automated firmware update policy",
-    "Establish formal security patch management process"
-  ],
-  "longTerm": [
-    "Plan infrastructure modernization",
-    "Implement infrastructure-as-code"
-  ]
-}
-```
+| Finding | Severity |
+|---|---|
+| Servers or fabric interconnects in Critical health | CRITICAL |
+| Unacknowledged critical alarms | CRITICAL |
+| Critical security advisories that apply | CRITICAL |
+| High-severity security advisories that apply | HIGH |
+| Critical or high field notices that apply | HIGH |
+| Failed components | HIGH |
+| Licensing out of compliance | HIGH |
+| Servers not on the HCL | HIGH |
+| Devices in Warning health | MEDIUM |
+| End-of-life advisories that apply | MEDIUM |
+| Secure Boot not enabled | MEDIUM |
+| Trial licenses expiring within 30 days | MEDIUM |
+| Firmware version drift within a model | LOW |
+| Servers without a TPM | LOW |
+| Servers whose HCL status couldn't be verified | LOW |
 
-### Issues Section
-```json
-[
-  {
-    "id": "ALM-1",
-    "category": "HARDWARE",
-    "severity": "CRITICAL",
-    "title": "2 critical alarms active",
-    "description": "There are 2 unresolved critical alarms",
-    "affectedResources": [],
-    "remediation": "Review and resolve each critical alarm"
-  },
-  {
-    "id": "SEC-1",
-    "category": "SECURITY",
-    "severity": "CRITICAL",
-    "title": "2 security advisories requiring attention",
-    "description": "2 CVE or security advisories detected",
-    "affectedResources": [],
-    "remediation": "Apply latest security patches and firmware updates"
-  }
-]
-```
+## Related Tool: get_top_resources
 
-## Usage Examples
+`get_top_resources` ranks servers and/or chassis by the same telemetry over a configurable window:
 
-### User Request
-```
-"Generate a security report for our infrastructure"
-```
-
-### Agent Response
-Returns a comprehensive `SecurityHealthCheckResult` with:
-- Overall security score (85/100)
-- 2 critical security advisories requiring attention
-- 4 firmware updates including 1 security-critical
-- License compliance status
-- Immediate, short-term, and long-term recommendations
-
-### User Request
-```
-"Is our infrastructure healthy? Any issues I should know about?"
-```
-
-### Agent Response
-Returns a comprehensive health report with:
-- Hardware health status (DEGRADED)
-- 2 failed processors and 1 degraded memory module
-- Thermal status (WARNING - approaching limits)
-- Performance analysis showing CPU-intensive servers
-- Immediate recommendations to address degraded hardware
+- `metricName`:
+  - `CpuUtilization`: servers only, %
+  - `PowerConsumption`: average W, with the peak sample
+  - `Temperature`: hottest sensor, °C
+- `resourceType`: `Server` (default), `Chassis`, or `All`
+- `topN` (default 10, max 100) and `windowMinutes` (default 60, min 10)
 
 ## Keyword Triggers
 
-The agent should be automatically invoked when users ask about:
+The agent fits requests such as:
 
-**Security-related keywords:**
-- "security", "secure", "vulnerability", "CVE", "threat", "breach", "attack"
-- "compliance", "audit", "policy", "governance", "risk"
-- "encrypt", "firewall", "authentication", "access control"
-
-**Health-related keywords:**
-- "health", "status", "health check", "diagnostic"
-- "problem", "issue", "failure", "degraded", "error"
-- "thermal", "temperature", "power", "fan"
-- "alarm", "alert", "warning", "critical"
-
-**Both:**
-- "report", "summary", "overview", "assessment"
-- "advisories", "TAM", "field notice"
-- "firmware", "update", "patch"
-
-## Scoring Logic
-
-### Security Score (0-100)
-- -5 points per critical security advisory
-- -3 points per security advisory
-- -10 points if TPM not present
-- -15 points if not licensed
-- -10 points if licenses expired
-
-### Health Score (0-100)
-- -10 points per critical alarm
-- -3 points per warning alarm
-- -30 points if hardware CRITICAL
-- -15 points if hardware DEGRADED
-- -5 points if thermal WARNING
-- -5 points if power DEGRADED
-
-### Compliance Score (0-100)
-- -20 points if non-compliant
-- -15 points if no policies
-- -5 points per policy violation
-
-## Performance Characteristics
-
-- **Execution Time**: 2-8 seconds (production infrastructure), <1ms (mock data)
-- **Parallel Data Collection**: 16+ API endpoints called simultaneously 
-- **Report Size**: 15-50 KB JSON (depending on infrastructure size)
-- **Refresh Rate**: Real-time (every invocation pulls live data)
-- **Error Resilience**: Graceful degradation - continues with partial data if endpoints fail
-- **Memory Usage**: ~5-10 MB peak during data aggregation
-- **Infrastructure Scale**: Tested with 100+ servers, 1000+ components
-
-### Test Results (Mock Data)
-
-```
-✅ Agent Status: WORKING
-📊 Overall Score: 89/100
-🔒 Security Score: 92/100  
-💚 Health Score: 90/100
-📋 Compliance Score: 85/100
-🚨 Critical Issues: 1
-📝 Total Issues: 4
-💡 Recommendations: 2 immediate, 2 short-term
-⏱️ Execution Time: 1ms
-```
-
-### Production Performance
-
-- **API Calls**: 16+ parallel requests with automatic fallback
-- **Data Processing**: Real-time analysis of live infrastructure state
-- **Console Logging**: Detailed progress reporting during execution:
-  ```
-  🔍 Generating Security & Health Check Report...
-  ✅ Security & Health Check Report generated successfully
-  📊 Report includes:
-     - X alarms analyzed (Y critical)
-     - X advisories reviewed (Y field notices, Z EOL)  
-     - X firmware components checked
-     - X servers assessed
-  ```
-
-## Version History & Recent Updates
-
-### Version 1.0.16 (November 2025)
-
-**✅ Production Ready Release**
-- **Null Safety Fixes**: Resolved 4 critical null safety issues in data processing
-- **Thermal Logic Fix**: Corrected temperature threshold logic (>95°C = CRITICAL, >85°C = WARNING)  
-- **Array Validation**: Added comprehensive array validation for all data sources
-- **Core Tools Integration**: Added to CORE_66_TOOLS for default availability
-- **Real-time Data**: Enhanced to pull live data from 16+ endpoints simultaneously
-- **Error Resilience**: Comprehensive error handling with graceful degradation
-
-**Recent Bug Fixes**:
-1. **Hardware Analysis** (Line 659): Fixed null access on hardware object
-2. **Thermal Analysis** (Line 764): Fixed null access + corrected threshold logic  
-3. **Performance Analysis** (Line 830): Added topResources array validation
-4. **Compliance Analysis** (Line 818): Added policies/operatingSystems array validation
-
-**Test Coverage**: 100% passing with mock data validation
-
-### Current Status
-
-✅ **DEPLOYED**: Live in production (PID 46013)  
-✅ **TESTED**: Comprehensive unit testing with realistic mock data  
-✅ **DOCUMENTED**: Full implementation guide and API documentation  
-✅ **MONITORED**: Console logging for execution tracking  
-
-## Keyword Triggers
-
-The agent automatically activates when users request:
-
-**Security Keywords**: "security", "secure", "vulnerability", "CVE", "compliance", "risk", "audit"  
-**Health Keywords**: "health", "status", "diagnostic", "problem", "failure", "alarm", "thermal"  
-**General Keywords**: "report", "summary", "assessment", "advisories", "firmware", "check"
-
-## Future Enhancements
-
-1. **Trending Analysis** - Historical score tracking and trend identification
-2. **Predictive Analytics** - ML-based failure prediction and capacity planning
-3. **Automated Remediation** - Integration with Intersight orchestration for self-healing
-4. **Custom Thresholds** - User-configurable alert thresholds and scoring weights
-5. **Export Formats** - PDF, Excel, HTML report generation
-6. **Webhook Integration** - Real-time notifications for critical findings
-7. **Comparison Reports** - Infrastructure state comparison over time
-
-## Security Considerations
-
-1. **Data Sensitivity** - Reports contain infrastructure details
-2. **Access Control** - Restrict report generation to authorized users
-3. **Retention Policy** - Define how long reports are stored
-4. **Audit Logging** - Log all report requests
-5. **Encryption** - Store sensitive data encrypted
+- **Security:** "security", "vulnerability", "CVE", "compliance", "risk", "audit"
+- **Health:** "health", "status", "diagnostic", "problem", "failure", "alarm", "thermal", "power"
+- **General:** "report", "summary", "assessment", "advisories", "firmware", "check"
 
 ## Troubleshooting
 
-### Agent returns empty data
-- Check API credentials and connectivity
-- Verify user has required Intersight permissions
-- Review console logs for API errors
-
-### Scores seem incorrect
-- Verify all data sources are providing complete information
-- Check scoring algorithm thresholds
-- Review sample report data
-
-### Report takes too long to generate
-- Check network latency to Intersight
-- Consider running in off-peak hours
-- Reduce report scope if available
-
-## References
-
-- **Source Code**: [securityHealthCheckAgent.ts](src/services/securityHealthCheckAgent.ts) - Complete agent implementation
-- **Server Integration**: [server.ts](src/server.ts) - Tool registration and handler (lines 3496, 4538+)
-- **Tool Configuration**: [config.ts](src/utils/config.ts) - Core tools configuration (line 100)
-- **MCP Documentation**: [Model Context Protocol](https://spec.modelcontextprotocol.io/)
-- **Intersight API**: [Cisco Intersight Developer Guide](https://developer.cisco.com/docs/intersight/)
-- **TAM API Reference**: [Technical Advisory & Monitoring](https://intersight.com/apidocs/apirefs/tam/overview/)
+- **`status` is `PARTIAL` or `ERROR`:** read `dataGaps`. A 401/403 means the credential's role can't read that source.
+- **The performance section has no samples:**
+  - Check that the account has an Essentials or higher license.
+  - Check that the servers are a supported platform (see Requirements).
+  - Telemetry arrives every 10 minutes on Essentials, so very short windows can be empty.
+- **Many servers show HCL status `Incomplete`:** install Cisco UCS Tools on the host OS so Intersight can collect OS and driver inventory.
 
 ## Tool Access
 
-**Command**: `generate_security_health_report`  
-**Availability**: Core mode (66 tools) and All mode (199+ tools)  
-**Parameters**: None required  
-**Returns**: Complete SecurityHealthCheckResult JSON  
+**Command:** `generate_security_health_report`  
+**Availability:** core and all tool modes  
+**Parameters:** none  
+**Returns:** the report JSON described above
 
-**Example Usage in Chat**:
+**Example requests:**
 ```
 "Generate a security health report"
-"Check our infrastructure health"  
-"Run a comprehensive security assessment"
-"Show me any critical issues"
+"Check our infrastructure health"
+"Which servers are affected by critical security advisories?"
 ```

@@ -130,15 +130,14 @@ Watch the Claude Desktop MCP integration in action:
 
 ## 🤖 Security & Health Check Agent
 
-The Intersight MCP Server includes an **intelligent Security & Health Check Agent** that automatically orchestrates comprehensive infrastructure analysis when security or health checks are requested.
+The `generate_security_health_report` tool builds a security and health report for the whole Intersight environment from live Intersight data.
 
 ### Agent Capabilities
 
-- **13-Phase Analysis**: Alarms, advisories, CVEs, firmware, hardware, security posture, compliance, and performance
-- **Intelligent Scoring**: 0-100 scores for Security, Health, and Compliance components
-- **Risk-Based Prioritization**: Issues categorized as CRITICAL, HIGH, MEDIUM, or LOW
-- **Actionable Recommendations**: Four-tier guidance (Immediate, Short-term, Medium-term, Long-term)
-- **Executive Reports**: Comprehensive JSON reports with detailed findings and remediation steps
+- **Coverage**: device health, alarms, applicable security advisories / field notices / EOL notices, firmware version drift, licensing, Secure Boot, TPM, HCL compliance, and power / temperature / CPU telemetry
+- **Scoring**: 0-100 Security, Health and Compliance scores, with the method included in the report; a score is null when its data can't be read
+- **Prioritized findings**: issues rated CRITICAL, HIGH, MEDIUM or LOW, each with affected resources and remediation
+- **Data gaps**: sources that can't be read are listed in `dataGaps` and never reported as zero findings
 
 
 For detailed agent documentation, see [SECURITY_HEALTH_AGENT.md](SECURITY_HEALTH_AGENT.md).
