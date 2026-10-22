@@ -21,7 +21,7 @@
  */
 
 import fs from 'fs';
-import { IntersightConfig } from '../services/intersightApi.js';
+import { IntersightConfig, OAuth2Auth } from '../services/intersightApi.js';
 
 export interface MCPServerConfig {
   serverConfig: {
@@ -217,11 +217,59 @@ export function getEnabledTools(allTools: any[], config: MCPServerConfig): any[]
   return allTools.filter(tool => isToolEnabled(tool.name, config, allTools.map(t => t.name)));
 }
 
+function loadOAuth2Auth(baseUrl: string): OAuth2Auth {
+  const clientId = process.env.INTERSIGHT_OAUTH2_CLIENT_ID;
+  const clientSecretPath = process.env.INTERSIGHT_OAUTH2_CLIENT_SECRET_PATH;
+  const clientSecret = process.env.INTERSIGHT_OAUTH2_CLIENT_SECRET;
+
+  if (!clientId) {
+    throw new Error('INTERSIGHT_OAUTH2_CLIENT_ID environment variable is required for OAuth2 authentication');
+  }
+
+  let secret: string;
+
+  if (clientSecretPath) {
+    try {
+      secret = fs.readFileSync(clientSecretPath, 'utf8').trim();
+    } catch (error) {
+      throw new Error(`Failed to read OAuth2 client secret from ${clientSecretPath}: ${error}`);
+    }
+  } else if (clientSecret) {
+    secret = clientSecret;
+  } else {
+    throw new Error('Either INTERSIGHT_OAUTH2_CLIENT_SECRET_PATH or INTERSIGHT_OAUTH2_CLIENT_SECRET must be set for OAuth2 authentication');
+  }
+
+  // The token endpoint is at the host root, outside the /api/v1 base path
+  const tokenUrl = process.env.INTERSIGHT_OAUTH2_TOKEN_URL || `${new URL(baseUrl).origin}/iam/token`;
+
+  return {
+    method: 'oauth2',
+    clientId,
+    clientSecret: secret,
+    tokenUrl
+  };
+}
+
 export function loadConfig(): IntersightConfig {
+  const baseUrl = process.env.INTERSIGHT_BASE_URL || 'https://intersight.com/api/v1';
+  const authMethod = process.env.INTERSIGHT_AUTH_METHOD ||
+    (process.env.INTERSIGHT_OAUTH2_CLIENT_ID ? 'oauth2' : 'apikey');
+
+  if (authMethod === 'oauth2') {
+    return {
+      baseUrl,
+      auth: loadOAuth2Auth(baseUrl)
+    };
+  }
+
+  if (authMethod !== 'apikey') {
+    throw new Error(`Unsupported INTERSIGHT_AUTH_METHOD '${authMethod}' (expected 'apikey' or 'oauth2')`);
+  }
+
   const apiKeyId = process.env.INTERSIGHT_API_KEY_ID;
   const apiSecretKeyPath = process.env.INTERSIGHT_API_SECRET_KEY_PATH;
   const apiSecretKey = process.env.INTERSIGHT_API_SECRET_KEY;
-  const baseUrl = process.env.INTERSIGHT_BASE_URL || 'https://intersight.com/api/v1';
 
   if (!apiKeyId) {
     throw new Error('INTERSIGHT_API_KEY_ID environment variable is required');
@@ -244,8 +292,11 @@ export function loadConfig(): IntersightConfig {
   }
 
   return {
-    apiKeyId,
-    apiSecretKey: secretKey,
-    baseUrl
+    baseUrl,
+    auth: {
+      method: 'apikey',
+      apiKeyId,
+      apiSecretKey: secretKey
+    }
   };
 }

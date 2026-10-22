@@ -22,15 +22,26 @@
 
 import crypto from 'crypto';
 import fetch from 'node-fetch';
+import { OAuth2ClientCredentials, OAuth2TokenProvider } from './oauth2TokenProvider.js';
 
-export interface IntersightConfig {
+export interface ApiKeyAuth {
+  method: 'apikey';
   apiKeyId: string;
   apiSecretKey: string;
+}
+
+export interface OAuth2Auth extends OAuth2ClientCredentials {
+  method: 'oauth2';
+}
+
+export interface IntersightConfig {
   baseUrl: string;
+  auth: ApiKeyAuth | OAuth2Auth;
 }
 
 export class IntersightApiService {
   private config: IntersightConfig;
+  private tokenProvider: OAuth2TokenProvider | null = null;
 
   constructor(config: IntersightConfig) {
     this.config = config;
@@ -41,6 +52,7 @@ export class IntersightApiService {
    * Supports both RSA and EC (ECDSA) keys
    */
   private generateAuthSignature(
+    auth: ApiKeyAuth,
     method: string,
     path: string,
     body: string,
@@ -55,7 +67,7 @@ export class IntersightApiService {
     const digestHeader = `digest: SHA-256=${body ? crypto.createHash('sha256').update(body).digest('base64') : emptyBodyHash}`;
     
     // Detect key type and use appropriate header list
-    const keyType = this.config.apiSecretKey.includes('BEGIN EC') ? 'EC' : 'RSA';
+    const keyType = auth.apiSecretKey.includes('BEGIN EC') ? 'EC' : 'RSA';
     
     let signatureString: string;
     let headersList: string;
@@ -81,9 +93,54 @@ export class IntersightApiService {
     const signature = crypto
       .createSign(algorithm)
       .update(signatureString)
-      .sign(this.config.apiSecretKey, 'base64');
+      .sign(auth.apiSecretKey, 'base64');
 
-    return `Signature keyId="${this.config.apiKeyId}",algorithm="${headerAlgorithm}",headers="${headersList}",signature="${signature}"`;
+    return `Signature keyId="${auth.apiKeyId}",algorithm="${headerAlgorithm}",headers="${headersList}",signature="${signature}"`;
+  }
+
+  /**
+   * Build the authentication headers for a request: a bearer token for OAuth2,
+   * or an HTTP signature for API keys
+   */
+  private async getAuthHeaders(
+    method: string,
+    url: string,
+    bodyString: string
+  ): Promise<Record<string, string>> {
+    const auth = this.config.auth;
+
+    if (auth.method === 'oauth2') {
+      this.tokenProvider ??= new OAuth2TokenProvider(auth);
+      return { 'Authorization': `Bearer ${await this.tokenProvider.getToken()}` };
+    }
+
+    const parsedUrl = new URL(url);
+    const path = parsedUrl.pathname + parsedUrl.search;
+    const timestamp = new Date().toUTCString();
+
+    // Always include digest header (required for EC keys in Intersight API v3)
+    const digestHash = bodyString
+      ? crypto.createHash('sha256').update(bodyString).digest('base64')
+      : crypto.createHash('sha256').update('').digest('base64');
+
+    return {
+      'Date': timestamp,
+      'Host': parsedUrl.host,
+      'Authorization': this.generateAuthSignature(auth, method, path, bodyString, timestamp, parsedUrl.host),
+      'Digest': `SHA-256=${digestHash}`
+    };
+  }
+
+  private async sendRequest(method: string, url: string, bodyString: string) {
+    return fetch(url, {
+      method,
+      headers: {
+        ...(await this.getAuthHeaders(method, url, bodyString)),
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: bodyString || undefined
+    });
   }
 
   /**
@@ -95,30 +152,15 @@ export class IntersightApiService {
     body?: any
   ): Promise<any> {
     const url = `${this.config.baseUrl}${endpoint}`;
-    const parsedUrl = new URL(url);
-    const path = parsedUrl.pathname + parsedUrl.search;
-    const timestamp = new Date().toUTCString();
     const bodyString = body ? JSON.stringify(body) : '';
 
-    const headers: Record<string, string> = {
-      'Date': timestamp,
-      'Host': parsedUrl.host,
-      'Authorization': this.generateAuthSignature(method, path, bodyString, timestamp, parsedUrl.host),
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    };
+    let response = await this.sendRequest(method, url, bodyString);
 
-    // Always include digest header (required for EC keys in Intersight API v3)
-    const digestHash = bodyString 
-      ? crypto.createHash('sha256').update(bodyString).digest('base64')
-      : crypto.createHash('sha256').update('').digest('base64');
-    headers['Digest'] = `SHA-256=${digestHash}`;
-
-    const response = await fetch(url, {
-      method,
-      headers,
-      body: bodyString || undefined
-    });
+    // A token can be revoked before its stated expiry; get a fresh one and retry once
+    if (response.status === 401 && this.tokenProvider) {
+      this.tokenProvider.invalidate();
+      response = await this.sendRequest(method, url, bodyString);
+    }
 
     if (!response.ok) {
       const errorText = await response.text();

@@ -8,9 +8,14 @@ services:
       - "3000:3000"
     environment:
       # Intersight API Configuration
-      - INTERSIGHT_API_KEY_ID=${INTERSIGHT_API_KEY_ID}
-      - INTERSIGHT_PRIVATE_KEY_PATH=/app/secrets/private_key.pem
-      - INTERSIGHT_BASE_URL=${INTERSIGHT_BASE_URL:-https://intersight.com}
+      - INTERSIGHT_AUTH_METHOD=${INTERSIGHT_AUTH_METHOD:-}
+      # OAuth2 client credentials
+      - INTERSIGHT_OAUTH2_CLIENT_ID=${INTERSIGHT_OAUTH2_CLIENT_ID:-}
+      - INTERSIGHT_OAUTH2_CLIENT_SECRET=${INTERSIGHT_OAUTH2_CLIENT_SECRET:-}
+      # API key (HTTP signature)
+      - INTERSIGHT_API_KEY_ID=${INTERSIGHT_API_KEY_ID:-}
+      - INTERSIGHT_API_SECRET_KEY_PATH=/app/secrets/private_key.pem
+      - INTERSIGHT_BASE_URL=${INTERSIGHT_BASE_URL:-https://intersight.com/api/v1}
       # Optional: Custom port
       - PORT=3000
     volumes:
@@ -48,7 +53,7 @@ networks:
     driver: bridge
 
 # Example usage:
-# 1. Copy your Intersight private key to ./auth/private_key.pem
-# 2. Create .env file with INTERSIGHT_API_KEY_ID=your_key_id
-# 3. Run: docker-compose up -d
+# 1. Create .env file with INTERSIGHT_OAUTH2_CLIENT_ID and INTERSIGHT_OAUTH2_CLIENT_SECRET
+#    (or, for API key auth: INTERSIGHT_API_KEY_ID, and copy your private key to ./auth/private_key.pem)
+# 2. Run: docker-compose up -d
 # 4. For production with SSL: docker-compose --profile production up -d

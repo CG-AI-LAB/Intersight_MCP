@@ -14,7 +14,7 @@ See [TOOL_CONFIGURATION.md](TOOL_CONFIGURATION.md) for detailed configuration op
 
 - Node.js 16+ installed
 - VSCode with GitHub Copilot or Claude Desktop
-- Intersight API credentials (Key ID + Secret Key)
+- Intersight credentials: an OAuth2 client (Client ID + Client Secret) or an API key (Key ID + Secret Key)
 
 ### 1. Build the Server
 
@@ -22,6 +22,21 @@ See [TOOL_CONFIGURATION.md](TOOL_CONFIGURATION.md) for detailed configuration op
 npm install
 npm run build
 ```
+
+### Authentication
+
+The server authenticates to Intersight with either OAuth2 client credentials or an API key. OAuth2 is used when `INTERSIGHT_OAUTH2_CLIENT_ID` is set; set `INTERSIGHT_AUTH_METHOD` to `oauth2` or `apikey` to choose explicitly.
+
+**OAuth2 (client credentials)**: register an OAuth2 client application in Intersight with the Client Credentials grant type. The server exchanges the client ID and secret for an access token at `https://<intersight host>/iam/token`, caches it, and refreshes it before it expires. API calls run with the roles assigned to that application, so give it a Read-Only role when running in core mode.
+
+| Variable | Description |
+|----------|-------------|
+| `INTERSIGHT_OAUTH2_CLIENT_ID` | OAuth2 client ID |
+| `INTERSIGHT_OAUTH2_CLIENT_SECRET` | OAuth2 client secret |
+| `INTERSIGHT_OAUTH2_CLIENT_SECRET_PATH` | Alternative to `INTERSIGHT_OAUTH2_CLIENT_SECRET`: path to a file containing the secret |
+| `INTERSIGHT_OAUTH2_TOKEN_URL` | Optional token endpoint override (defaults to the `INTERSIGHT_BASE_URL` host + `/iam/token`) |
+
+**API key (HTTP signature)**: set `INTERSIGHT_API_KEY_ID` and either `INTERSIGHT_API_SECRET_KEY_PATH` or `INTERSIGHT_API_SECRET_KEY`. RSA and EC keys are supported.
 
 ### 2. Configure LLM Client
 
@@ -38,8 +53,8 @@ npm run build
       "command": "node",
       "args": ["/path/to/intersight-mcp-server/build/index.js"],
       "env": {
-        "INTERSIGHT_API_KEY_ID": "your-api-key-id",
-        "INTERSIGHT_API_SECRET_KEY_PATH": "/path/to/SecretKey.txt",
+        "INTERSIGHT_OAUTH2_CLIENT_ID": "your-client-id",
+        "INTERSIGHT_OAUTH2_CLIENT_SECRET_PATH": "/path/to/oauth2_client_secret",
         "INTERSIGHT_BASE_URL": "https://intersight.com/api/v1",
         "INTERSIGHT_TOOL_MODE": "core"
       }
@@ -66,8 +81,8 @@ npm run build
       "command": "node",
       "args": ["/path/to/intersight-mcp-server/build/index.js"],
       "env": {
-        "INTERSIGHT_API_KEY_ID": "your-api-key-id",
-        "INTERSIGHT_API_SECRET_KEY_PATH": "/path/to/SecretKey.txt",
+        "INTERSIGHT_OAUTH2_CLIENT_ID": "your-client-id",
+        "INTERSIGHT_OAUTH2_CLIENT_SECRET_PATH": "/path/to/oauth2_client_secret",
         "INTERSIGHT_BASE_URL": "https://intersight.com/api/v1",
         "INTERSIGHT_TOOL_MODE": "core"
       }
