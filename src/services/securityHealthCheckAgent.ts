@@ -58,6 +58,8 @@ export interface HealthCheckData {
   licenses: any[] | null;
   tpms: any[] | null;
   bootSecurity: any[] | null;
+  serverProfiles: any[] | null;
+  bootPolicies: any[] | null;
   hclStatuses: any[] | null;
   components: Record<ComponentType, any[] | null>;
   metrics: ServerMetrics | null;
@@ -133,10 +135,13 @@ export async function collectHealthCheckData(api: IntersightApiService): Promise
     fetchAll('servers', '/compute/PhysicalSummaries?$select=Moid,Name,Model,Serial,Firmware,ManagementMode,AlarmSummary'),
     fetchAll('fabricInterconnects', '/network/ElementSummaries?$select=Moid,Name,Model,Serial,Version,AlarmSummary'),
     fetchAll('alarms', `/cond/Alarms?${odataFilter("Severity ne 'Cleared'")}&$select=Code,Severity,Acknowledge,Suppressed,Description,AffectedMoDisplayName,AffectedMoType,CreationTime`),
-    fetchAll('advisories', `/tam/AdvisoryInstances?${odataFilter("State eq 'active'")}&$expand=Advisory`),
+    // An instance exists only while its advisory applies; State is deprecated and always 'unknown'
+    fetchAll('advisories', '/tam/AdvisoryInstances?$expand=Advisory'),
     fetchAll('licenses', '/license/LicenseInfos?$select=LicenseType,LicenseState,DaysLeft'),
     fetchAll('tpm', '/equipment/Tpms?$select=Presence,Ancestors'),
     fetchAll('secureBoot', '/boot/DeviceBootSecurities?$select=SecureBoot,ComputePhysical'),
+    fetchAll('serverProfiles', '/server/Profiles?$select=AssociatedServer,PolicyBucket'),
+    fetchAll('bootPolicies', '/boot/PrecisionPolicies?$select=Moid,EnforceUefiSecureBoot'),
     fetchAll('hcl', '/cond/HclStatuses?$select=Status,ServerReason,ManagedObject,ServerName,InvModel'),
     fetchAll('processors', '/processor/Units?$select=Presence,OperState'),
     fetchAll('memory', '/memory/Units?$select=Presence,OperState'),
@@ -154,6 +159,8 @@ export async function collectHealthCheckData(api: IntersightApiService): Promise
     licenses,
     tpms,
     bootSecurity,
+    serverProfiles,
+    bootPolicies,
     hclStatuses,
     processors,
     memory,
@@ -171,6 +178,8 @@ export async function collectHealthCheckData(api: IntersightApiService): Promise
     licenses,
     tpms,
     bootSecurity,
+    serverProfiles,
+    bootPolicies,
     hclStatuses,
     components: { processors, memory, drives, psus, fans },
     metrics,
@@ -200,7 +209,7 @@ export function createSecurityHealthCheckReport(data: HealthCheckData): Security
   const alarms = analyzeAlarms(data.alarms);
   const advisories = analyzeAdvisories(data.advisoryInstances, nameByMoid);
   const firmware = analyzeFirmware(data.servers, data.networkElements);
-  const security = analyzeSecurity(data.licenses, data.tpms, data.bootSecurity, data.servers);
+  const security = analyzeSecurity(data);
   const compliance = analyzeCompliance(data.hclStatuses);
   const performance = analyzePerformance(data.metrics);
 
@@ -297,8 +306,8 @@ function summarizeDeviceHealth(devices: any[]) {
   return { total: devices.length, ...counts, unhealthy };
 }
 
-const HEALTHY_STATES = ['operable', 'ok', 'good', 'enabled'];
-const DEGRADED_STATES = ['degraded', 'predictive-failure', 'partially-degraded'];
+const HEALTHY_STATES = ['operable', 'ok', 'good', 'enabled', 'powered on'];
+const DEGRADED_STATES = ['degraded', 'warning', 'predictive-failure', 'partially-degraded'];
 const FAILED_STATES = ['inoperable', 'failed', 'bad', 'disabled'];
 
 function summarizeComponents(components: any[], stateField: string) {
@@ -523,16 +532,34 @@ function analyzeLicenses(licenses: any[]) {
   };
 }
 
-function analyzeSecureBoot(bootSecurity: any[], servers: any[] | null) {
-  // SecureBoot reflects the setting configured in each server's boot policy
+function analyzeSecureBoot(
+  bootSecurity: any[] | null,
+  serverProfiles: any[] | null,
+  bootPolicies: any[] | null,
+  servers: any[] | null
+) {
+  // Both sources reflect the setting configured in each server's boot policy
   const enabled = new Set<string>();
   const disabled = new Set<string>();
-  for (const record of bootSecurity) {
+  for (const record of bootSecurity || []) {
     const moid = record.ComputePhysical?.Moid;
     if (!moid) {
       continue;
     }
     (lower(record.SecureBoot) === 'enabled' ? enabled : disabled).add(moid);
+  }
+
+  // Intersight-managed servers have no DeviceBootSecurity record; use the boot
+  // policy of the server profile deployed to them instead
+  const enforceByPolicy = new Map<string, boolean>(
+    (bootPolicies || []).map(p => [p.Moid, p.EnforceUefiSecureBoot === true]));
+  for (const profile of serverProfiles || []) {
+    const moid = profile.AssociatedServer?.Moid;
+    const policyRef = (profile.PolicyBucket || []).find((p: any) => p.ObjectType === 'boot.PrecisionPolicy');
+    if (!moid || enabled.has(moid) || disabled.has(moid) || !policyRef || !enforceByPolicy.has(policyRef.Moid)) {
+      continue;
+    }
+    (enforceByPolicy.get(policyRef.Moid) ? enabled : disabled).add(moid);
   }
 
   const nameOf = (moid: string) => servers?.find(s => s.Moid === moid)?.Name || moid;
@@ -571,10 +598,15 @@ function analyzeTpm(tpms: any[], servers: any[] | null) {
   };
 }
 
-function analyzeSecurity(licenses: any[] | null, tpms: any[] | null, bootSecurity: any[] | null, servers: any[] | null) {
+function analyzeSecurity(data: HealthCheckData) {
+  const { licenses, tpms, bootSecurity, serverProfiles, bootPolicies, servers } = data;
+  const secureBootReadable = bootSecurity !== null || (serverProfiles !== null && bootPolicies !== null);
+
   return {
     licensing: licenses ? analyzeLicenses(licenses) : unavailable('licenses'),
-    secureBoot: bootSecurity ? analyzeSecureBoot(bootSecurity, servers) : unavailable('Secure Boot settings'),
+    secureBoot: secureBootReadable
+      ? analyzeSecureBoot(bootSecurity, serverProfiles, bootPolicies, servers)
+      : unavailable('Secure Boot settings'),
     tpm: tpms ? analyzeTpm(tpms, servers) : unavailable('TPM inventory'),
   };
 }
@@ -660,11 +692,13 @@ function calculateScores(hardware: any, advisories: any, security: any, complian
     securityScore = Math.max(0, score);
   }
 
-  // Compliance: share of evaluated servers whose hardware/firmware/OS combination is HCL-validated
+  // Compliance: of the servers with a definite HCL result, the share that are validated.
+  // Unverified servers (e.g. Incomplete: OS driver inventory missing) are reported, not scored.
   let complianceScore: number | null = null;
-  if (compliance.available && compliance.serversEvaluated > 0) {
+  if (compliance.available) {
     const ok = HCL_COMPLIANT.reduce((sum, s) => sum + (compliance.byStatus[s] || 0), 0);
-    complianceScore = round((ok / compliance.serversEvaluated) * 100);
+    const determinate = ok + compliance.serversNotListed;
+    complianceScore = determinate > 0 ? round((ok / determinate) * 100) : null;
   }
 
   const known = [securityScore, healthScore, complianceScore].filter((s): s is number => s !== null);
@@ -676,8 +710,9 @@ function calculateScores(hardware: any, advisories: any, security: any, complian
     complianceScore,
     scoring: 'health = % of servers/FIs rated Healthy by Intersight (Warning counts half); ' +
       'security = 100 minus capped deductions for critical/high security advisories, license non-compliance, ' +
-      'and the share of servers without Secure Boot or TPM; compliance = % of servers HCL-validated. ' +
-      'overall = mean of the available scores. A null score means its data could not be read.',
+      'and the share of servers without Secure Boot or TPM; compliance = % HCL-validated among servers with a ' +
+      'definite HCL result (unverified servers are listed but not scored). ' +
+      'overall = mean of the available scores. A null score means its data could not be read or there was nothing to score.',
   };
 }
 
@@ -723,6 +758,20 @@ function generateIssues(hardware: any, alarms: any, advisories: any, firmware: a
       description: 'Installed components report an inoperable or failed state',
       affectedResources: [],
       remediation: 'Open a TAC case or replace the failed components',
+    }, 'HW');
+  }
+
+  const degradedComponents = Object.entries(hardware.componentDetails)
+    .filter(([, c]: [string, any]) => c.available !== false && c.degraded > 0)
+    .map(([type, c]: [string, any]) => `${c.degraded} ${type}`);
+  if (degradedComponents.length > 0) {
+    add({
+      category: 'HARDWARE',
+      severity: 'MEDIUM',
+      title: `Degraded components: ${degradedComponents.join(', ')}`,
+      description: 'Installed components report a degraded or warning state',
+      affectedResources: [],
+      remediation: 'Check the related alarms and plan replacement of the degraded components',
     }, 'HW');
   }
 
