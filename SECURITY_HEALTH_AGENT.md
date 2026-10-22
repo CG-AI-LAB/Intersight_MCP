@@ -15,10 +15,10 @@ Each collection is read in full: the agent pages through `$top`/`$skip` instead 
 | Device health | `compute/PhysicalSummaries`, `network/ElementSummaries` | `AlarmSummary.Health` (Healthy / Warning / Critical), Intersight's roll-up of each device's active alarms |
 | Component state | `processor/Units`, `memory/Units`, `storage/PhysicalDisks`, `equipment/Psus`, `equipment/FanModules` | `OperState` / `DiskState` of installed (`Presence` equipped) components |
 | Alarms | `cond/Alarms` with `Severity ne 'Cleared'` | Severity, acknowledgement, suppression, affected object |
-| Advisories | `tam/AdvisoryInstances` with `State eq 'active'`, `$expand=Advisory` | Security advisories (PSIRT, with CVEs and CVSS base score), field notices and end-of-life notices that apply to this environment, with the affected devices |
+| Advisories | `tam/AdvisoryInstances` with `$expand=Advisory` | Security advisories (PSIRT, with CVEs and CVSS base score), field notices and end-of-life notices that apply to this environment, with the affected devices. An instance exists only while its advisory applies; its `State` field is deprecated and always `unknown`, so it isn't used. |
 | Firmware | `Firmware` on servers, `Version` on fabric interconnects | Version distribution per model and version drift |
 | Licensing | `license/LicenseInfos` | `LicenseState` per license tier in use, `DaysLeft` for trials |
-| Secure Boot | `boot/DeviceBootSecurities` | `SecureBoot` as configured in each server's boot policy |
+| Secure Boot | `boot/DeviceBootSecurities`; for Intersight-managed (IMM) servers, `server/Profiles` and `boot/PrecisionPolicies` | `SecureBoot` for standalone and UCS Manager servers; for IMM servers, which have no DeviceBootSecurity record, `EnforceUefiSecureBoot` on the boot policy of the server profile deployed to the server |
 | TPM | `equipment/Tpms` | Installed TPMs, tied to servers through `Ancestors` |
 | HCL compliance | `cond/HclStatuses` | Per-server HCL `Status` and `ServerReason` |
 | Power, temperature, CPU | `POST telemetry/TimeSeries` (Druid groupBy on `PhysicalEntities`) | Average and peak power (`hw.host`), hottest sensor (`hw.temperature`), CPU C0 utilization (`hw.cpu`) over the last 60 minutes |
@@ -39,7 +39,7 @@ Each collection is read in full: the agent pages through `$top`/`$skip` instead 
 | `status` | `SUCCESS` (all sources read), `PARTIAL` (some sources missing, see `dataGaps`), or `ERROR` (nothing could be read) |
 | `dataGaps` | `{source, error}` for each source that failed |
 | `summary` | `overallScore`, `securityScore`, `healthScore`, `complianceScore` (0-100, or null when the inputs are unavailable), `scoring` (how the scores are calculated), issue counts, and device/alarm/advisory totals |
-| `hardware` | Health counts and the least healthy servers and fabric interconnects; per-type component state counts, with unrecognized states listed in `otherStates` |
+| `hardware` | Health counts and the least healthy servers and fabric interconnects; per-type component state counts (states such as `operable`, `OK`, `powered on` count as healthy; `degraded` and `Warning` as degraded), with unrecognized states listed in `otherStates` |
 | `alarms` | Counts by severity; acknowledged and suppressed counts; unacknowledged critical/warning counts; top alarms; alarms grouped by code and by device type |
 | `advisories` | Applicable advisories by type and severity; top advisories with CVEs, base score, link, recommendation and affected devices |
 | `firmware` | Versions per server and fabric interconnect model, and the models running more than one version |
@@ -59,7 +59,9 @@ Each collection is read in full: the agent pages through `$top`/`$skip` instead 
   - up to 10 in proportion to the share of servers without a TPM
 
   It is null when advisories can't be read.
-- **Compliance:** the percentage of evaluated servers whose hardware, firmware and OS combination is HCL-validated (or not applicable).
+- **Compliance:** among servers with a definite HCL result, the percentage that are validated (or not applicable) rather than not listed.
+  - Servers whose status can't be verified (for example `Incomplete` because OS driver inventory is missing) are listed and raised as a low-severity issue, but not scored.
+  - The score is null when no server has a definite result.
 - **Overall:** the mean of the scores that are available.
 
 ## Issues Raised
@@ -75,6 +77,7 @@ Each collection is read in full: the agent pages through `$top`/`$skip` instead 
 | Licensing out of compliance | HIGH |
 | Servers not on the HCL | HIGH |
 | Devices in Warning health | MEDIUM |
+| Degraded components | MEDIUM |
 | End-of-life advisories that apply | MEDIUM |
 | Secure Boot not enabled | MEDIUM |
 | Trial licenses expiring within 30 days | MEDIUM |
